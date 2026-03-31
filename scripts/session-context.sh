@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT}/scripts"
 QM="$SCRIPT_DIR/quartermaster"
 
-# Auto-compile if binary missing
 if [ ! -x "$QM" ]; then
     bash "$SCRIPT_DIR/build.sh" >&2 2>&1 || {
         error_msg='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Quartermaster plugin root: '"$CLAUDE_PLUGIN_ROOT"'\n\n**Quartermaster:** Build failed. Run `bash '"$SCRIPT_DIR"'/build.sh` manually."}}'
@@ -13,13 +12,10 @@ if [ ! -x "$QM" ]; then
     }
 fi
 
-# Phase 1: Get inventory restock alerts
 INV_JSON=$("$QM" inv-list --low-only --summary 2>/dev/null || echo '{"low_stock_count":0,"low_stock_items":[],"total_items":0}')
 
-# Phase 2: Sync and get shopping list summary (may fail if no EventKit permission — that's fine)
 SHOP_JSON=$("$QM" shop-list --sync --summary 2>/dev/null || echo '{"active_lists":[],"purchased_since_last_sync":[],"pushed":0}')
 
-# Phase 3: Format output
 python3 -c "
 import json, sys, os
 
@@ -38,7 +34,6 @@ except:
 lines = []
 has_content = False
 
-# Restock alerts table
 low_items = inv.get('low_stock_items', [])
 if low_items:
     has_content = True
@@ -55,7 +50,6 @@ if low_items:
         days_str = f'~{days}' if days is not None else '—'
         lines.append(f'  | {name} | {qty} {unit} | {thresh} | {usage} | {days_str} |')
 
-# Active shopping lists table
 active_lists = shop.get('active_lists', [])
 if active_lists:
     has_content = True
@@ -69,7 +63,6 @@ if active_lists:
         synced = 'Yes' if lst.get('synced', False) else 'No'
         lines.append(f'  | {name} | {count} | {synced} |')
 
-# Purchased since last session table
 purchased = shop.get('purchased_since_last_sync', [])
 if purchased:
     has_content = True

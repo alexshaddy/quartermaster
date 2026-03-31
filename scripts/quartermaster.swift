@@ -1,11 +1,7 @@
 import Foundation
 import EventKit
 
-// MARK: - Version
-
 let VERSION = "0.1.0"
-
-// MARK: - JSON Output Helpers
 
 func jsonString(_ dict: [String: Any]) -> String {
     guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
@@ -37,8 +33,6 @@ func exitWithError(_ message: String, extras: [String: Any] = [:]) -> Never {
     exit(1)
 }
 
-// MARK: - Argument Parsing Helpers
-
 func flagValue(_ flag: String, in args: [String]) -> String? {
     guard let idx = args.firstIndex(of: flag), idx + 1 < args.count else { return nil }
     return args[idx + 1]
@@ -47,8 +41,6 @@ func flagValue(_ flag: String, in args: [String]) -> String? {
 func hasFlag(_ flag: String, in args: [String]) -> Bool {
     return args.contains(flag)
 }
-
-// MARK: - Path Helpers
 
 let fm = FileManager.default
 let homeDir = fm.homeDirectoryForCurrentUser
@@ -64,8 +56,6 @@ func isPathSafe(_ path: String) -> Bool {
     return !path.contains("..")
 }
 
-// MARK: - ID Helpers
-
 func slugify(_ name: String) -> String {
     let slug = name.lowercased()
         .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
@@ -80,8 +70,6 @@ func uniqueId(_ baseName: String, existingIds: [String]) -> String {
     while existingIds.contains("\(base)-\(counter)") { counter += 1 }
     return "\(base)-\(counter)"
 }
-
-// MARK: - Config Management
 
 let configDir = homeDir.appendingPathComponent(".config/quartermaster")
 let configFile = configDir.appendingPathComponent("config.json")
@@ -129,8 +117,6 @@ func defaultConfig() -> [String: Any] {
     ] as [String: Any]
 }
 
-// MARK: - Inventory Data
-
 func readInventory() -> [String: Any] {
     let inv = readJSON(inventoryFile)
     if inv.isEmpty { return ["items": [] as [[String: Any]]] }
@@ -145,8 +131,6 @@ func inventoryItems(_ inv: [String: Any]) -> [[String: Any]] {
     return inv["items"] as? [[String: Any]] ?? []
 }
 
-// MARK: - Shopping List Data
-
 func readLists() -> [String: Any] {
     let lists = readJSON(listsFile)
     if lists.isEmpty { return ["lists": [] as [[String: Any]]] }
@@ -160,8 +144,6 @@ func writeLists(_ data: [String: Any]) {
 func shoppingLists(_ data: [String: Any]) -> [[String: Any]] {
     return data["lists"] as? [[String: Any]] ?? []
 }
-
-// MARK: - Usage Rate Calculations
 
 func daysUntilRestock(_ item: [String: Any]) -> Int? {
     guard let qty = item["quantity"] as? Int,
@@ -190,8 +172,6 @@ func isLowStock(_ item: [String: Any]) -> Bool {
     return qty <= threshold
 }
 
-// MARK: - Brief Helpers
-
 func ensureOutputDir(_ path: String) {
     let url = resolvePath(path)
     try? fm.createDirectory(at: url, withIntermediateDirectories: true)
@@ -204,8 +184,6 @@ func saveBrief(_ content: String, config: [String: Any]) {
     let fileURL = resolvePath(briefsDir).appendingPathComponent("\(dateStr).md")
     try? content.write(to: fileURL, atomically: true, encoding: .utf8)
 }
-
-// MARK: - EventKit Store
 
 let store = EKEventStore()
 
@@ -263,8 +241,6 @@ func fetchReminders(from list: EKCalendar, includeCompleted: Bool = true) -> [EK
     return fetched
 }
 
-// MARK: - Main Dispatch
-
 func printUsage() {
     let usage = """
     Usage: quartermaster <command> [options]
@@ -310,8 +286,6 @@ func main() {
         exitWithError("Unknown command: \(command)")
     }
 }
-
-// MARK: - Command Stubs (implemented in subsequent tasks)
 
 func cmdQmConfig(_ args: [String]) {
     var config = readConfig()
@@ -724,7 +698,6 @@ func cmdShopList(_ args: [String]) {
                     listItems[itemIdx]["synced"] = true
                     pushedCount += 1
                 } catch {
-                    // Skip failed items, continue with rest
                 }
             }
             lists[listIdx]["items"] = listItems
@@ -824,7 +797,6 @@ func cmdShopAdd(_ args: [String]) {
 
     var listItems = lists[listIdx]["items"] as? [[String: Any]] ?? []
 
-    // Bulk restock mode: add all inventory items below restock threshold
     if hasFlag("--restock", in: args) {
         let inv = readInventory()
         let items = inventoryItems(inv)
@@ -865,7 +837,6 @@ func cmdShopAdd(_ args: [String]) {
         return
     }
 
-    // From-inventory mode: link a shopping item to an inventory entry
     if let invId = flagValue("--from-inventory", in: args) {
         let inv = readInventory()
         let items = inventoryItems(inv)
@@ -903,7 +874,6 @@ func cmdShopAdd(_ args: [String]) {
         return
     }
 
-    // Manual mode: add an item by name, quantity, and unit
     guard let name = flagValue("--name", in: args) else {
         exitWithError("Provide --name <name> --qty <N> --unit <unit>, or --from-inventory <id>, or --restock")
     }
