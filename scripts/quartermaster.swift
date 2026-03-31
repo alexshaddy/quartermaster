@@ -578,7 +578,231 @@ func cmdInvUpdate(_ args: [String]) {
 }
 
 func cmdShopList(_ args: [String]) {
-    exitWithError("Not yet implemented")
+    let config = readConfig()
+    var listsData = readLists()
+    var lists = shoppingLists(listsData)
+    let now = ISO8601DateFormatter().string(from: Date())
+
+    if let name = flagValue("--create", in: args) {
+        let existingIds = lists.compactMap { $0["id"] as? String }
+        let id = uniqueId(name, existingIds: existingIds)
+
+        let newList: [String: Any] = [
+            "id": id,
+            "name": name,
+            "created": now,
+            "archived": false,
+            "items": [] as [[String: Any]]
+        ]
+
+        lists.append(newList)
+        listsData["lists"] = lists
+        writeLists(listsData)
+        printJSON(["status": "created", "list": newList])
+        return
+    }
+
+    if let id = flagValue("--view", in: args) {
+        guard let list = lists.first(where: { ($0["id"] as? String) == id }) else {
+            exitWithError("List '\(id)' not found")
+        }
+        printJSON(list)
+        return
+    }
+
+    if let id = flagValue("--archive", in: args) {
+        guard let idx = lists.firstIndex(where: { ($0["id"] as? String) == id }) else {
+            exitWithError("List '\(id)' not found")
+        }
+        lists[idx]["archived"] = true
+        listsData["lists"] = lists
+        writeLists(listsData)
+        printJSON(["status": "archived", "id": id])
+        return
+    }
+
+    if let id = flagValue("--export", in: args) {
+        guard let list = lists.first(where: { ($0["id"] as? String) == id }) else {
+            exitWithError("List '\(id)' not found")
+        }
+        let listsDir = config["lists_dir"] as? String ?? "~/quartermaster/lists"
+        ensureOutputDir(listsDir)
+        let listItems = list["items"] as? [[String: Any]] ?? []
+        let name = list["name"] as? String ?? id
+
+        var lines = ["# \(name)", ""]
+        for item in listItems {
+            let itemName = item["name"] as? String ?? "?"
+            let qty = item["quantity"] as? Int ?? 1
+            let unit = item["unit"] as? String ?? ""
+            let purchased = item["purchased"] as? Bool ?? false
+            let checkbox = purchased ? "[x]" : "[ ]"
+            lines.append("- \(checkbox) \(itemName) (\(qty) \(unit))")
+        }
+
+        let fileURL = resolvePath(listsDir).appendingPathComponent("\(id).md")
+        let content = lines.joined(separator: "\n")
+        try? content.write(to: fileURL, atomically: true, encoding: .utf8)
+        printJSON(["status": "exported", "path": fileURL.path])
+        return
+    }
+
+    if hasFlag("--sync", in: args) {
+        requestReminderAccess()
+        let syncListName = config["sync_reminder_list"] as? String ?? "Shopping"
+        let syncList = findOrCreateReminderList(syncListName)
+        let isSummary = hasFlag("--summary", in: args)
+
+        let lastSyncStr = config["last_sync"] as? String
+        let lastSyncDate: Date?
+        if let str = lastSyncStr {
+            let fmt = ISO8601DateFormatter()
+            lastSyncDate = fmt.date(from: str)
+            if let d = lastSyncDate, d > Date() {
+                exitWithError("Invalid last_sync timestamp (future date): \(str)")
+            }
+        } else {
+            lastSyncDate = nil
+        }
+
+        let reminders = fetchReminders(from: syncList, includeCompleted: true)
+        var purchasedItems: [[String: Any]] = []
+
+        for reminder in reminders {
+            guard reminder.isCompleted,
+                  let completionDate = reminder.completionDate,
+                  lastSyncDate == nil || completionDate > lastSyncDate! else { continue }
+
+            let title = reminder.title ?? ""
+            for listIdx in 0..<lists.count {
+                var listItems = lists[listIdx]["items"] as? [[String: Any]] ?? []
+                for itemIdx in 0..<listItems.count {
+                    let itemName = listItems[itemIdx]["name"] as? String ?? ""
+                    let synced = listItems[itemIdx]["synced"] as? Bool ?? false
+                    let purchased = listItems[itemIdx]["purchased"] as? Bool ?? false
+                    let listName = lists[listIdx]["name"] as? String ?? ""
+                    let expectedPrefix = "[\(listName)] \(itemName)"
+
+                    if synced && !purchased && title.lowercased().hasPrefix(expectedPrefix.lowercased()) {
+                        listItems[itemIdx]["purchased"] = true
+                        purchasedItems.append([
+                            "name": itemName,
+                            "list": listName,
+                            "list_id": lists[listIdx]["id"] as? String ?? "",
+                            "from_inventory": listItems[itemIdx]["from_inventory"] ?? NSNull()
+                        ])
+                        break
+                    }
+                }
+                lists[listIdx]["items"] = listItems
+            }
+        }
+
+        var pushedCount = 0
+        for listIdx in 0..<lists.count {
+            let archived = lists[listIdx]["archived"] as? Bool ?? false
+            if archived { continue }
+
+            var listItems = lists[listIdx]["items"] as? [[String: Any]] ?? []
+            let listName = lists[listIdx]["name"] as? String ?? ""
+
+            for itemIdx in 0..<listItems.count {
+                let synced = listItems[itemIdx]["synced"] as? Bool ?? false
+                let purchased = listItems[itemIdx]["purchased"] as? Bool ?? false
+                if synced || purchased { continue }
+
+                let itemName = listItems[itemIdx]["name"] as? String ?? ""
+                let qty = listItems[itemIdx]["quantity"] as? Int ?? 1
+                let unit = listItems[itemIdx]["unit"] as? String ?? ""
+
+                let reminder = EKReminder(eventStore: store)
+                reminder.title = "[\(listName)] \(itemName) (\(qty) \(unit))"
+                reminder.calendar = syncList
+
+                do {
+                    try store.save(reminder, commit: true)
+                    listItems[itemIdx]["synced"] = true
+                    pushedCount += 1
+                } catch {
+                    // Skip failed items, continue with rest
+                }
+            }
+            lists[listIdx]["items"] = listItems
+        }
+
+        listsData["lists"] = lists
+        writeLists(listsData)
+
+        var updatedConfig = config
+        updatedConfig["last_sync"] = ISO8601DateFormatter().string(from: Date())
+        writeConfig(updatedConfig)
+
+        if isSummary {
+            let activeLists = lists.filter { !($0["archived"] as? Bool ?? false) }
+            let listSummaries: [[String: Any]] = activeLists.map { list in
+                let items = list["items"] as? [[String: Any]] ?? []
+                let syncedCount = items.filter { $0["synced"] as? Bool ?? false }.count
+                return [
+                    "name": list["name"] ?? "",
+                    "id": list["id"] ?? "",
+                    "item_count": items.count,
+                    "synced": syncedCount == items.count && !items.isEmpty
+                ] as [String: Any]
+            }
+            printJSON([
+                "status": "synced",
+                "pushed": pushedCount,
+                "purchased_since_last_sync": purchasedItems,
+                "active_lists": listSummaries
+            ])
+        } else {
+            printJSON([
+                "status": "synced",
+                "pushed": pushedCount,
+                "purchased_since_last_sync": purchasedItems,
+                "lists": lists
+            ])
+        }
+        return
+    }
+
+    let showAll = hasFlag("--all", in: args)
+    let wantBrief = hasFlag("--save-brief", in: args)
+
+    var filtered = lists
+    if !showAll {
+        filtered = filtered.filter { !($0["archived"] as? Bool ?? false) }
+    }
+
+    let summaries: [[String: Any]] = filtered.map { list in
+        let items = list["items"] as? [[String: Any]] ?? []
+        let purchasedCount = items.filter { $0["purchased"] as? Bool ?? false }.count
+        return [
+            "id": list["id"] ?? "",
+            "name": list["name"] ?? "",
+            "item_count": items.count,
+            "purchased_count": purchasedCount,
+            "archived": list["archived"] ?? false,
+            "created": list["created"] ?? ""
+        ] as [String: Any]
+    }
+
+    var result: [String: Any] = ["lists": summaries, "count": summaries.count]
+    if !showAll { result["filter"] = "active_only" }
+
+    if wantBrief {
+        var lines = ["# Quartermaster Shopping Brief — \(ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate]))", ""]
+        lines.append("\(summaries.count) lists")
+        for s in summaries {
+            let name = s["name"] as? String ?? "?"
+            let count = s["item_count"] as? Int ?? 0
+            lines.append("- \(name): \(count) items")
+        }
+        saveBrief(lines.joined(separator: "\n"), config: config)
+        result["brief_saved"] = true
+    }
+
+    printJSON(result)
 }
 
 func cmdShopAdd(_ args: [String]) {
