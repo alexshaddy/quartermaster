@@ -314,7 +314,80 @@ func main() {
 // MARK: - Command Stubs (implemented in subsequent tasks)
 
 func cmdQmConfig(_ args: [String]) {
-    exitWithError("Not yet implemented")
+    var config = readConfig()
+
+    if hasFlag("--show", in: args) {
+        printJSON(config)
+        return
+    }
+
+    if hasFlag("--reset", in: args) {
+        writeConfig(defaultConfig())
+        printJSON(["status": "reset", "message": "Config reset to defaults"])
+        return
+    }
+
+    if let path = flagValue("--set-lists-dir", in: args) {
+        guard isPathSafe(path) else { exitWithError("Path contains unsafe components") }
+        config["lists_dir"] = path
+        writeConfig(config)
+        printJSON(["status": "updated", "lists_dir": path])
+        return
+    }
+
+    if let path = flagValue("--set-briefs-dir", in: args) {
+        guard isPathSafe(path) else { exitWithError("Path contains unsafe components") }
+        config["briefs_dir"] = path
+        writeConfig(config)
+        printJSON(["status": "updated", "briefs_dir": path])
+        return
+    }
+
+    if let name = flagValue("--set-sync-list", in: args) {
+        config["sync_reminder_list"] = name
+        writeConfig(config)
+        printJSON(["status": "updated", "sync_reminder_list": name])
+        return
+    }
+
+    if let name = flagValue("--add-category", in: args) {
+        var cats = config["categories"] as? [String] ?? []
+        if cats.contains(name) {
+            exitWithError("Category '\(name)' already exists")
+        }
+        cats.append(name)
+        config["categories"] = cats
+        writeConfig(config)
+        printJSON(["status": "added", "category": name, "categories": cats])
+        return
+    }
+
+    if let name = flagValue("--remove-category", in: args) {
+        var cats = config["categories"] as? [String] ?? []
+        guard cats.contains(name) else {
+            exitWithError("Category '\(name)' not found")
+        }
+        cats.removeAll { $0 == name }
+        config["categories"] = cats
+        writeConfig(config)
+        printJSON(["status": "removed", "category": name, "categories": cats])
+        return
+    }
+
+    if hasFlag("--list-reminder-lists", in: args) {
+        requestReminderAccess()
+        let calendars = store.calendars(for: .reminder)
+        let result = calendars.map { cal -> [String: Any] in
+            return [
+                "title": cal.title,
+                "allows_modification": cal.allowsContentModifications
+            ] as [String: Any]
+        }
+        printJSON(["reminder_lists": result])
+        return
+    }
+
+    exitWithError("Usage: qm-config [--show | --reset | --set-lists-dir <path> | --set-briefs-dir <path> | --set-sync-list <name> | --add-category <name> | --remove-category <name> | --list-reminder-lists]")
 }
 
 func cmdInvList(_ args: [String]) {
