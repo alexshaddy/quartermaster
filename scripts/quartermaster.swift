@@ -806,7 +806,131 @@ func cmdShopList(_ args: [String]) {
 }
 
 func cmdShopAdd(_ args: [String]) {
-    exitWithError("Not yet implemented")
+    guard let listId = flagValue("--list", in: args) else {
+        exitWithError("Usage: shop-add --list <id> [--name <name> --qty <N> --unit <unit> [--category <cat>] | --from-inventory <inv-id> [--qty <N>] | --restock]")
+    }
+
+    var listsData = readLists()
+    var lists = shoppingLists(listsData)
+
+    guard let listIdx = lists.firstIndex(where: { ($0["id"] as? String) == listId }) else {
+        exitWithError("List '\(listId)' not found")
+    }
+
+    let archived = lists[listIdx]["archived"] as? Bool ?? false
+    if archived {
+        exitWithError("Cannot add items to archived list '\(listId)'")
+    }
+
+    var listItems = lists[listIdx]["items"] as? [[String: Any]] ?? []
+
+    // Bulk restock mode: add all inventory items below restock threshold
+    if hasFlag("--restock", in: args) {
+        let inv = readInventory()
+        let items = inventoryItems(inv)
+        let lowItems = items.filter { isLowStock($0) }
+
+        if lowItems.isEmpty {
+            printJSON(["status": "no_restock_needed", "message": "No inventory items below restock threshold"])
+            return
+        }
+
+        var added: [[String: Any]] = []
+        for item in lowItems {
+            let name = item["name"] as? String ?? ""
+            let threshold = item["restock_threshold"] as? Int ?? 0
+            let qty = item["quantity"] as? Int ?? 0
+            let restockQty = threshold - qty + 1
+            let unit = item["unit"] as? String ?? ""
+            let category = item["category"] as? String ?? ""
+            let invId = item["id"] as? String ?? ""
+
+            let newItem: [String: Any] = [
+                "name": name,
+                "category": category,
+                "quantity": max(restockQty, 1),
+                "unit": unit,
+                "from_inventory": invId,
+                "synced": false,
+                "purchased": false
+            ]
+            listItems.append(newItem)
+            added.append(newItem)
+        }
+
+        lists[listIdx]["items"] = listItems
+        listsData["lists"] = lists
+        writeLists(listsData)
+        printJSON(["status": "restock_added", "added": added, "count": added.count])
+        return
+    }
+
+    // From-inventory mode: link a shopping item to an inventory entry
+    if let invId = flagValue("--from-inventory", in: args) {
+        let inv = readInventory()
+        let items = inventoryItems(inv)
+        guard let item = items.first(where: { ($0["id"] as? String) == invId }) else {
+            exitWithError("Inventory item '\(invId)' not found")
+        }
+
+        let name = item["name"] as? String ?? ""
+        let unit = item["unit"] as? String ?? ""
+        let category = item["category"] as? String ?? ""
+        let qty: Int
+        if let qtyStr = flagValue("--qty", in: args), let q = Int(qtyStr) {
+            qty = q
+        } else {
+            let threshold = item["restock_threshold"] as? Int ?? 1
+            let currentQty = item["quantity"] as? Int ?? 0
+            qty = max(threshold - currentQty + 1, 1)
+        }
+
+        let newItem: [String: Any] = [
+            "name": name,
+            "category": category,
+            "quantity": qty,
+            "unit": unit,
+            "from_inventory": invId,
+            "synced": false,
+            "purchased": false
+        ]
+
+        listItems.append(newItem)
+        lists[listIdx]["items"] = listItems
+        listsData["lists"] = lists
+        writeLists(listsData)
+        printJSON(["status": "added", "item": newItem])
+        return
+    }
+
+    // Manual mode: add an item by name, quantity, and unit
+    guard let name = flagValue("--name", in: args) else {
+        exitWithError("Provide --name <name> --qty <N> --unit <unit>, or --from-inventory <id>, or --restock")
+    }
+    guard let qtyStr = flagValue("--qty", in: args), let qty = Int(qtyStr) else {
+        exitWithError("--qty <N> is required")
+    }
+    guard let unit = flagValue("--unit", in: args) else {
+        exitWithError("--unit <unit> is required")
+    }
+
+    let category = flagValue("--category", in: args) ?? ""
+
+    let newItem: [String: Any] = [
+        "name": name,
+        "category": category,
+        "quantity": qty,
+        "unit": unit,
+        "from_inventory": NSNull(),
+        "synced": false,
+        "purchased": false
+    ]
+
+    listItems.append(newItem)
+    lists[listIdx]["items"] = listItems
+    listsData["lists"] = lists
+    writeLists(listsData)
+    printJSON(["status": "added", "item": newItem])
 }
 
 func cmdShopDone(_ args: [String]) {
