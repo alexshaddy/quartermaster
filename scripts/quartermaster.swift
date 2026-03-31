@@ -934,7 +934,84 @@ func cmdShopAdd(_ args: [String]) {
 }
 
 func cmdShopDone(_ args: [String]) {
-    exitWithError("Not yet implemented")
+    guard let listId = flagValue("--list", in: args) else {
+        exitWithError("Usage: shop-done --list <id> [--item <name> | --all]")
+    }
+
+    var listsData = readLists()
+    var lists = shoppingLists(listsData)
+
+    guard let listIdx = lists.firstIndex(where: { ($0["id"] as? String) == listId }) else {
+        exitWithError("List '\(listId)' not found")
+    }
+
+    var listItems = lists[listIdx]["items"] as? [[String: Any]] ?? []
+    var inventoryUpdates: [[String: Any]] = []
+    var markedCount = 0
+
+    if hasFlag("--all", in: args) {
+        for i in 0..<listItems.count {
+            let purchased = listItems[i]["purchased"] as? Bool ?? false
+            if !purchased {
+                listItems[i]["purchased"] = true
+                markedCount += 1
+
+                let invId = listItems[i]["from_inventory"]
+                if let id = invId as? String {
+                    inventoryUpdates.append([
+                        "inventory_id": id,
+                        "item_name": listItems[i]["name"] ?? "",
+                        "purchased_qty": listItems[i]["quantity"] ?? 1,
+                        "unit": listItems[i]["unit"] ?? ""
+                    ])
+                }
+            }
+        }
+    } else if let itemName = flagValue("--item", in: args) {
+        var found = false
+        for i in 0..<listItems.count {
+            let name = listItems[i]["name"] as? String ?? ""
+            let purchased = listItems[i]["purchased"] as? Bool ?? false
+            if !purchased && name.lowercased() == itemName.lowercased() {
+                listItems[i]["purchased"] = true
+                markedCount = 1
+                found = true
+
+                let invId = listItems[i]["from_inventory"]
+                if let id = invId as? String {
+                    inventoryUpdates.append([
+                        "inventory_id": id,
+                        "item_name": name,
+                        "purchased_qty": listItems[i]["quantity"] ?? 1,
+                        "unit": listItems[i]["unit"] ?? ""
+                    ])
+                }
+                break
+            }
+        }
+        if !found {
+            exitWithError("No unpurchased item '\(itemName)' found in list '\(listId)'")
+        }
+    } else {
+        exitWithError("Specify --item <name> or --all")
+    }
+
+    lists[listIdx]["items"] = listItems
+    listsData["lists"] = lists
+    writeLists(listsData)
+
+    var result: [String: Any] = [
+        "status": "done",
+        "marked_purchased": markedCount,
+        "list_id": listId
+    ]
+
+    if !inventoryUpdates.isEmpty {
+        result["inventory_updates"] = inventoryUpdates
+        result["message"] = "Items with inventory links detected. Update inventory quantities?"
+    }
+
+    printJSON(result)
 }
 
 main()
