@@ -395,7 +395,95 @@ func cmdInvList(_ args: [String]) {
 }
 
 func cmdInvUpdate(_ args: [String]) {
-    exitWithError("Not yet implemented")
+    var inv = readInventory()
+    var items = inventoryItems(inv)
+    let now = ISO8601DateFormatter().string(from: Date())
+
+    if hasFlag("--add", in: args) {
+        guard let name = flagValue("--name", in: args) else {
+            exitWithError("--add requires --name <name>, --qty <N>, --unit <unit>, --category <cat>")
+        }
+        guard let qtyStr = flagValue("--qty", in: args), let qty = Int(qtyStr) else {
+            exitWithError("--add requires --qty <N>")
+        }
+        guard let unit = flagValue("--unit", in: args) else {
+            exitWithError("--add requires --unit <unit>")
+        }
+        guard let category = flagValue("--category", in: args) else {
+            exitWithError("--add requires --category <cat>")
+        }
+
+        let existingIds = items.compactMap { $0["id"] as? String }
+        let id = uniqueId(name, existingIds: existingIds)
+
+        var newItem: [String: Any] = [
+            "id": id,
+            "name": name,
+            "category": category,
+            "quantity": qty,
+            "unit": unit,
+            "last_updated": now
+        ]
+
+        if let threshStr = flagValue("--threshold", in: args), let thresh = Int(threshStr) {
+            newItem["restock_threshold"] = thresh
+        }
+        if let rateStr = flagValue("--usage-rate", in: args), let rate = Int(rateStr) {
+            guard rate > 0 else { exitWithError("Usage rate must be positive") }
+            guard let period = flagValue("--usage-period", in: args),
+                  ["day", "week", "month"].contains(period) else {
+                exitWithError("--usage-rate requires --usage-period <day|week|month>")
+            }
+            newItem["usage_rate"] = rate
+            newItem["usage_period"] = period
+        }
+
+        items.append(newItem)
+        inv["items"] = items
+        writeInventory(inv)
+        printJSON(["status": "added", "item": newItem])
+        return
+    }
+
+    if let id = flagValue("--set", in: args) {
+        guard let idx = items.firstIndex(where: { ($0["id"] as? String) == id }) else {
+            exitWithError("Item '\(id)' not found")
+        }
+
+        if let qtyStr = flagValue("--qty", in: args), let qty = Int(qtyStr) {
+            items[idx]["quantity"] = qty
+            items[idx]["last_updated"] = now
+        }
+        if let threshStr = flagValue("--threshold", in: args), let thresh = Int(threshStr) {
+            items[idx]["restock_threshold"] = thresh
+        }
+        if let rateStr = flagValue("--usage-rate", in: args), let rate = Int(rateStr) {
+            guard rate > 0 else { exitWithError("Usage rate must be positive") }
+            guard let period = flagValue("--usage-period", in: args),
+                  ["day", "week", "month"].contains(period) else {
+                exitWithError("--usage-rate requires --usage-period <day|week|month>")
+            }
+            items[idx]["usage_rate"] = rate
+            items[idx]["usage_period"] = period
+        }
+
+        inv["items"] = items
+        writeInventory(inv)
+        printJSON(["status": "updated", "item": items[idx]])
+        return
+    }
+
+    if let id = flagValue("--remove", in: args) {
+        let before = items.count
+        items.removeAll { ($0["id"] as? String) == id }
+        guard items.count < before else { exitWithError("Item '\(id)' not found") }
+        inv["items"] = items
+        writeInventory(inv)
+        printJSON(["status": "removed", "id": id])
+        return
+    }
+
+    exitWithError("Usage: inv-update [--add --name <name> --qty <N> --unit <unit> --category <cat> [--threshold <N>] [--usage-rate <N> --usage-period <day|week|month>] | --set <id> [--qty <N>] [--threshold <N>] [--usage-rate <N> --usage-period <period>] | --remove <id>]")
 }
 
 func cmdShopList(_ args: [String]) {
