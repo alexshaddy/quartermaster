@@ -391,7 +391,98 @@ func cmdQmConfig(_ args: [String]) {
 }
 
 func cmdInvList(_ args: [String]) {
-    exitWithError("Not yet implemented")
+    let config = readConfig()
+    let inv = readInventory()
+    var items = inventoryItems(inv)
+
+    let categoryFilter = flagValue("--category", in: args)
+    let lowOnly = hasFlag("--low-only", in: args)
+    let isSummary = hasFlag("--summary", in: args)
+    let wantBrief = hasFlag("--save-brief", in: args)
+
+    if let cat = categoryFilter {
+        items = items.filter { ($0["category"] as? String) == cat }
+    }
+    if lowOnly {
+        items = items.filter { isLowStock($0) }
+    }
+
+    let enriched: [[String: Any]] = items.map { item in
+        var result = item
+        if let days = daysUntilRestock(item) {
+            result["days_until_restock"] = days
+        }
+        result["low_stock"] = isLowStock(item)
+        return result
+    }
+
+    if isSummary {
+        let total = inventoryItems(inv).count
+        let lowItems = inventoryItems(inv).filter { isLowStock($0) }
+        let lowEnriched: [[String: Any]] = lowItems.map { item in
+            var result: [String: Any] = [
+                "name": item["name"] ?? "",
+                "quantity": item["quantity"] ?? 0,
+                "unit": item["unit"] ?? "",
+                "restock_threshold": item["restock_threshold"] ?? 0
+            ]
+            if let days = daysUntilRestock(item) {
+                result["days_until_restock"] = days
+            }
+            if let rate = item["usage_rate"] as? Int, let period = item["usage_period"] as? String {
+                result["usage"] = "\(rate)/\(period)"
+            }
+            return result
+        }
+        var summaryResult: [String: Any] = [
+            "total_items": total,
+            "low_stock_count": lowItems.count,
+            "low_stock_items": lowEnriched
+        ]
+        if wantBrief {
+            var lines = ["# Quartermaster Inventory Brief — \(ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate]))", ""]
+            lines.append("\(total) items tracked, \(lowItems.count) low stock")
+            if !lowItems.isEmpty {
+                lines.append("\n## Restock Alerts")
+                for item in lowEnriched {
+                    let name = item["name"] as? String ?? "?"
+                    let qty = item["quantity"] as? Int ?? 0
+                    let unit = item["unit"] as? String ?? ""
+                    let days = item["days_until_restock"] as? Int
+                    let daysStr = days != nil ? ", ~\(days!) days" : ""
+                    lines.append("- \(name): \(qty) \(unit)\(daysStr)")
+                }
+            }
+            saveBrief(lines.joined(separator: "\n"), config: config)
+            summaryResult["brief_saved"] = true
+        }
+        printJSON(summaryResult)
+        return
+    }
+
+    var result: [String: Any] = ["items": enriched, "count": enriched.count]
+    if let cat = categoryFilter { result["filter_category"] = cat }
+    if lowOnly { result["filter"] = "low_stock_only" }
+
+    if wantBrief {
+        var lines = ["# Quartermaster Inventory Brief — \(ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate]))", ""]
+        lines.append("\(enriched.count) items")
+        for item in enriched {
+            let name = item["name"] as? String ?? "?"
+            let qty = item["quantity"] as? Int ?? 0
+            let unit = item["unit"] as? String ?? ""
+            let low = item["low_stock"] as? Bool ?? false
+            let days = item["days_until_restock"] as? Int
+            var line = "- \(name): \(qty) \(unit)"
+            if low { line += " ⚠ LOW" }
+            if let d = days { line += " (~\(d) days)" }
+            lines.append(line)
+        }
+        saveBrief(lines.joined(separator: "\n"), config: config)
+        result["brief_saved"] = true
+    }
+
+    printJSON(result)
 }
 
 func cmdInvUpdate(_ args: [String]) {
