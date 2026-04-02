@@ -7,7 +7,8 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/session-context.sh\"",
-            "timeout": 15000
+            "timeout": 15000,
+            "statusMessage": "Checking inventory..."
           }
         ]
       }
