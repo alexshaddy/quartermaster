@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT}/scripts"
 QM="$SCRIPT_DIR/quartermaster"
+CONFIG_FILE="$HOME/.config/quartermaster/config.json"
 
 if [ ! -x "$QM" ]; then
     bash "$SCRIPT_DIR/build.sh" >&2 2>&1 || {
@@ -14,22 +15,49 @@ fi
 
 INV_JSON=$("$QM" inv-list --low-only --summary 2>/dev/null || echo '{"low_stock_count":0,"low_stock_items":[],"total_items":0}')
 
-SHOP_JSON=$("$QM" shop-list --sync --summary 2>/dev/null || echo '{"active_lists":[],"purchased_since_last_sync":[],"pushed":0}')
+SHOP_JSON=$("$QM" shop-list --sync --summary 2>/dev/null || echo '{"count":0,"lists":[]}')
 
-python3 -c "
-import json, sys, os
+# Read save directories from config
+BRIEFS_DIR=$(python3 -c "
+import json, os
+try:
+    config = json.load(open('$CONFIG_FILE'))
+    d = config.get('briefs_dir', '').strip().replace('~', os.path.expanduser('~'))
+    print(d)
+except:
+    print('')
+" 2>/dev/null)
+
+LISTS_DIR=$(python3 -c "
+import json, os
+try:
+    config = json.load(open('$CONFIG_FILE'))
+    d = config.get('lists_dir', '').strip().replace('~', os.path.expanduser('~'))
+    print(d)
+except:
+    print('')
+" 2>/dev/null)
+
+# Format output and optionally save archives — pass JSON via env var to prevent shell injection
+QM_INV="$INV_JSON" QM_SHOP="$SHOP_JSON" QM_BRIEFS_DIR="$BRIEFS_DIR" QM_LISTS_DIR="$LISTS_DIR" \
+  python3 -c "
+import json, os
+from datetime import date
 
 root = os.environ.get('CLAUDE_PLUGIN_ROOT', '')
+briefs_dir = os.environ.get('QM_BRIEFS_DIR', '')
+lists_dir = os.environ.get('QM_LISTS_DIR', '')
+today = date.today().isoformat()
 
 try:
-    inv = json.loads('''$INV_JSON''')
+    inv = json.loads(os.environ.get('QM_INV', '{}'))
 except:
     inv = {'low_stock_count': 0, 'low_stock_items': [], 'total_items': 0}
 
 try:
-    shop = json.loads('''$SHOP_JSON''')
+    shop = json.loads(os.environ.get('QM_SHOP', '{}'))
 except:
-    shop = {'active_lists': [], 'purchased_since_last_sync': [], 'pushed': 0}
+    shop = {'count': 0, 'lists': []}
 
 lines = []
 has_content = False
@@ -50,7 +78,8 @@ if low_items:
         days_str = f'~{days}' if days is not None else '—'
         lines.append(f'  | {name} | {qty} {unit} | {thresh} | {usage} | {days_str} |')
 
-active_lists = shop.get('active_lists', [])
+# Support both 'active_lists' (summary flag) and 'lists' (full output)
+active_lists = shop.get('active_lists', shop.get('lists', []))
 if active_lists:
     has_content = True
     if lines: lines.append('')
@@ -59,9 +88,28 @@ if active_lists:
     lines.append('  |------|-------|--------|')
     for lst in active_lists:
         name = lst.get('name', '?')
-        count = lst.get('item_count', 0)
+        count = lst.get('item_count', lst.get('count', 0))
         synced = 'Yes' if lst.get('synced', False) else 'No'
         lines.append(f'  | {name} | {count} | {synced} |')
+
+    # Save each list as its own file in lists_dir (current state, overwrites)
+    if lists_dir:
+        os.makedirs(lists_dir, exist_ok=True)
+        for lst in active_lists:
+            name = lst.get('name', 'unnamed').replace(' ', '-').lower()
+            items = lst.get('items', [])
+            list_lines = [f'# {lst.get(\"name\", name)}', f'*Updated: {today}*', '']
+            for it in items:
+                checkbox = '[x]' if it.get('purchased', False) else '[ ]'
+                label = it.get('name', '?')
+                qty = it.get('quantity')
+                label = f'{label} x{qty}' if qty and qty != 1 else label
+                list_lines.append(f'- {checkbox} {label}')
+            if not items:
+                list_lines.append('*(empty)*')
+            list_file = os.path.join(lists_dir, f'{name}.md')
+            with open(list_file, 'w') as f:
+                f.write('\n'.join(list_lines) + '\n')
 
 purchased = shop.get('purchased_since_last_sync', [])
 if purchased:
@@ -81,6 +129,13 @@ if has_content:
     content = 'Quartermaster:\n' + '\n'.join(lines)
 else:
     content = 'Quartermaster: Supplies nominal'
+
+# Save dated brief
+if briefs_dir:
+    os.makedirs(briefs_dir, exist_ok=True)
+    brief_file = os.path.join(briefs_dir, f'{today}.md')
+    with open(brief_file, 'w') as f:
+        f.write(f'# Quartermaster Brief — {today}\n\n{content.replace(\"Quartermaster:\", \"\").strip()}\n')
 
 print(json.dumps({
     'hookSpecificOutput': {
