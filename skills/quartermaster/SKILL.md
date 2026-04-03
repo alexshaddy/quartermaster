@@ -20,7 +20,7 @@ Quartermaster tracks household inventory and manages shopping lists with Apple R
 
 When this is a morning session:
 
-1. The SessionStart hook has already injected restock alerts and shopping data
+1. Run `quartermaster inv-list --low-only --summary` → restock alerts; Run `quartermaster shop-list --sync --summary` → active shopping lists
 2. Include a "Quartermaster" section in the morning briefing
 3. Surface restock alerts with item names, quantities, and days-until-empty
 4. Show active shopping lists with item counts and sync status
