@@ -62,7 +62,7 @@ During sessions, if the user mentions:
 - Receiving a delivery → suggest `/inv-update` to update quantities
 
 **Never add items, sync, or update inventory without user direction.**
-- **Session hook auto-sync is off by default.** The session hook respects the `sync_on_session_start` config flag in `~/.config/quartermaster/config.json` (default: `false`). When `false`, the hook fetches shopping lists locally — no EventKit access, no Apple Reminders sync. To enable auto-sync on every session start, set `"sync_on_session_start": true` in the config file. When enabled, `--sync` runs silently and will request Reminders permission if not already granted.
+- **Session hook auto-sync is off by default.** The session hook respects the `sync_on_session_start` config flag in `~/.config/quartermaster/config.json` (default: `false`). When `false`, the hook fetches shopping lists locally — no EventKit access, no Apple Reminders sync. To enable auto-sync on every session start, run `/qm-config --set-sync-on-session-start true`. When enabled, `--sync` runs silently and will request Reminders permission if not already granted.
 
 ## Cross-Talk Workflow
 

@@ -1,7 +1,7 @@
 import Foundation
 import EventKit
 
-let VERSION = "0.1.0"
+let VERSION = "0.1.1"
 
 func jsonString(_ dict: [String: Any]) -> String {
     guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
@@ -59,7 +59,8 @@ func resolvePath(_ path: String) -> URL {
 
 func isPathSafe(_ path: String) -> Bool {
     guard !path.contains("..") else { return false }
-    let resolved = URL(fileURLWithPath: path.hasPrefix("~") ? path.replacingOccurrences(of: "~", with: FileManager.default.homeDirectoryForCurrentUser.path) : path).standardized.path
+    let expanded = path.hasPrefix("~/") ? FileManager.default.homeDirectoryForCurrentUser.path + "/" + String(path.dropFirst(2)) : path
+    let resolved = URL(fileURLWithPath: expanded).standardized.path
     return resolved.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
 }
 
@@ -111,7 +112,11 @@ func writeJSON(_ dict: [String: Any], to file: URL) throws {
     } catch {
         throw WriteError.writeFailed(file.lastPathComponent, error)
     }
-    try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    do {
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    } catch {
+        printToStderr("{\"warning\":\"setAttributes failed\",\"file\":\"\(file.lastPathComponent)\",\"detail\":\"\(error.localizedDescription)\"}")
+    }
 }
 
 func readConfig() -> [String: Any] {
@@ -135,6 +140,7 @@ func defaultConfig() -> [String: Any] {
         "briefs_dir": "~/quartermaster/briefs",
         "sync_reminder_list": "Shopping",
         "last_sync": NSNull(),
+        "sync_on_session_start": false,
         "categories": ["Groceries", "Household", "Personal Care", "Electronics"]
     ] as [String: Any]
 }
@@ -384,6 +390,16 @@ func cmdQmConfig(_ args: [String]) {
         return
     }
 
+    if let valueStr = flagValue("--set-sync-on-session-start", in: args) {
+        guard valueStr == "true" || valueStr == "false" else {
+            exitWithError("--set-sync-on-session-start requires <true|false>")
+        }
+        config["sync_on_session_start"] = (valueStr == "true")
+        writeConfig(config)
+        printJSON(["status": "updated", "sync_on_session_start": (valueStr == "true")])
+        return
+    }
+
     if hasFlag("--list-reminder-lists", in: args) {
         requestReminderAccess()
         let calendars = store.calendars(for: .reminder)
@@ -397,7 +413,7 @@ func cmdQmConfig(_ args: [String]) {
         return
     }
 
-    exitWithError("Usage: qm-config [--show | --reset | --set-lists-dir <path> | --set-briefs-dir <path> | --set-sync-list <name> | --add-category <name> | --remove-category <name> | --list-reminder-lists]")
+    exitWithError("Usage: qm-config [--show | --reset | --set-lists-dir <path> | --set-briefs-dir <path> | --set-sync-list <name> | --set-sync-on-session-start <true|false> | --add-category <name> | --remove-category <name> | --list-reminder-lists]")
 }
 
 func cmdInvList(_ args: [String]) {

@@ -1,6 +1,6 @@
 ---
 description: Configure Quartermaster — categories, save directories, sync settings
-argument-hint: [--show | --reset | --set-lists-dir <path> | --set-briefs-dir <path> | --set-sync-list <name> | --add-category <name> | --remove-category <name> | --list-reminder-lists]
+argument-hint: [--show | --reset | --set-lists-dir <path> | --set-briefs-dir <path> | --set-sync-list <name> | --set-sync-on-session-start <true|false> | --add-category <name> | --remove-category <name> | --list-reminder-lists]
 allowed-tools: Bash(*quartermaster*)
 ---
 
@@ -34,6 +34,7 @@ Ask the user what they'd like to change:
 - Add or remove categories
 - Change save directories for lists or briefs
 - Change which Apple Reminders list to sync with (use `--list-reminder-lists` to show available options)
+- Enable or disable session-start sync (use `--set-sync-on-session-start true` or `false`)
 
 **Step 4: Apply changes**
 
