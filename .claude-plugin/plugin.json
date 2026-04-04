@@ -4,5 +4,19 @@
   "description": "Inventory and shopping list management for Claude Code — usage tracking, restock alerts, Apple Reminders sync",
   "author": { "name": "alexshaddy" },
   "license": "MIT",
-  "keywords": ["inventory", "shopping", "lists", "reminders", "macos", "swift"]
+  "keywords": ["inventory", "shopping", "lists", "reminders", "macos", "swift"],
+  "commands": [
+    "commands/inv-list.md",
+    "commands/inv-update.md",
+    "commands/shop-list.md",
+    "commands/shop-add.md",
+    "commands/shop-done.md",
+    "commands/qm-config.md"
+  ],
+  "hooks": [
+    "hooks/hooks.json"
+  ],
+  "skills": [
+    "skills/quartermaster/SKILL.md"
+  ]
 }

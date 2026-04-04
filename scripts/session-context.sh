@@ -6,7 +6,7 @@ QM="$SCRIPT_DIR/quartermaster"
 CONFIG_FILE="$HOME/.config/quartermaster/config.json"
 
 if [ ! -x "$QM" ]; then
-    bash "$SCRIPT_DIR/build.sh" >&2 2>&1 || {
+    bash "$SCRIPT_DIR/build.sh" >/dev/null 2>&1 || {
         error_msg='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Quartermaster plugin root: '"$CLAUDE_PLUGIN_ROOT"'\n\n**Quartermaster:** Build failed. Run `bash '"$SCRIPT_DIR"'/build.sh` manually."}}'
         printf '%s' "$error_msg"
         exit 0
@@ -15,28 +15,24 @@ fi
 
 INV_JSON=$("$QM" inv-list --low-only --summary 2>/dev/null || echo '{"low_stock_count":0,"low_stock_items":[],"total_items":0}')
 
-SHOP_JSON=$("$QM" shop-list --sync --summary 2>/dev/null || echo '{"count":0,"lists":[]}')
-
-# Read save directories from config
-BRIEFS_DIR=$(python3 -c "
+# Read config values — one python3 call for both dirs and sync flag
+read -r BRIEFS_DIR LISTS_DIR SYNC_ENABLED < <(QM_CONFIG_FILE="$CONFIG_FILE" python3 -c "
 import json, os
 try:
-    config = json.load(open('$CONFIG_FILE'))
-    d = config.get('briefs_dir', '').strip().replace('~', os.path.expanduser('~'))
-    print(d)
+    config = json.load(open(os.environ['QM_CONFIG_FILE']))
+    briefs = config.get('briefs_dir', '').strip()
+    lists = config.get('lists_dir', '').strip()
+    sync = 'true' if config.get('sync_on_session_start', False) else 'false'
+    print(briefs, lists, sync)
 except:
-    print('')
+    print('', '', 'false')
 " 2>/dev/null)
 
-LISTS_DIR=$(python3 -c "
-import json, os
-try:
-    config = json.load(open('$CONFIG_FILE'))
-    d = config.get('lists_dir', '').strip().replace('~', os.path.expanduser('~'))
-    print(d)
-except:
-    print('')
-" 2>/dev/null)
+if [ "$SYNC_ENABLED" = "true" ]; then
+    SHOP_JSON=$("$QM" shop-list --sync --summary 2>/dev/null || echo '{"count":0,"lists":[]}')
+else
+    SHOP_JSON=$("$QM" shop-list --summary 2>/dev/null || echo '{"count":0,"lists":[]}')
+fi
 
 # Format output and optionally save archives — pass JSON via env var to prevent shell injection
 QM_INV="$INV_JSON" QM_SHOP="$SHOP_JSON" QM_BRIEFS_DIR="$BRIEFS_DIR" QM_LISTS_DIR="$LISTS_DIR" \
@@ -45,8 +41,8 @@ import json, os
 from datetime import date
 
 root = os.environ.get('CLAUDE_PLUGIN_ROOT', '')
-briefs_dir = os.environ.get('QM_BRIEFS_DIR', '')
-lists_dir = os.environ.get('QM_LISTS_DIR', '')
+briefs_dir = os.path.expanduser(os.environ.get('QM_BRIEFS_DIR', ''))
+lists_dir = os.path.expanduser(os.environ.get('QM_LISTS_DIR', ''))
 today = date.today().isoformat()
 
 try:

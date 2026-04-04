@@ -62,6 +62,7 @@ During sessions, if the user mentions:
 - Receiving a delivery → suggest `/inv-update` to update quantities
 
 **Never add items, sync, or update inventory without user direction.**
+- **Session hook auto-sync is off by default.** The session hook respects the `sync_on_session_start` config flag in `~/.config/quartermaster/config.json` (default: `false`). When `false`, the hook fetches shopping lists locally — no EventKit access, no Apple Reminders sync. To enable auto-sync on every session start, set `"sync_on_session_start": true` in the config file. When enabled, `--sync` runs silently and will request Reminders permission if not already granted.
 
 ## Cross-Talk Workflow
 
@@ -78,6 +79,6 @@ Inventory and shopping lists work together:
 ## Safety Rules
 
 - **Never modify inventory or lists without user direction.**
-- **Never run `--sync` without informing the user.** (Session hook sync is silent and lightweight.)
+- **Never run `--sync` without informing the user.** (Session hook sync only runs if `sync_on_session_start: true` is set in config — it is off by default.)
 - **EventKit permission optional.** If denied, all local commands work. Only sync is affected.
 - **Archived lists are not deleted.** They're preserved for history.

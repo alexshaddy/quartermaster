@@ -33,6 +33,10 @@ func exitWithError(_ message: String, extras: [String: Any] = [:]) -> Never {
     exit(1)
 }
 
+func printToStderr(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+
 func flagValue(_ flag: String, in args: [String]) -> String? {
     guard let idx = args.firstIndex(of: flag), idx + 1 < args.count else { return nil }
     return args[idx + 1]
@@ -44,6 +48,7 @@ func hasFlag(_ flag: String, in args: [String]) -> Bool {
 
 let fm = FileManager.default
 let homeDir = fm.homeDirectoryForCurrentUser
+let isoFormatter = ISO8601DateFormatter()
 
 func resolvePath(_ path: String) -> URL {
     if path.hasPrefix("~/") {
@@ -53,7 +58,9 @@ func resolvePath(_ path: String) -> URL {
 }
 
 func isPathSafe(_ path: String) -> Bool {
-    return !path.contains("..")
+    guard !path.contains("..") else { return false }
+    let resolved = URL(fileURLWithPath: path.hasPrefix("~") ? path.replacingOccurrences(of: "~", with: FileManager.default.homeDirectoryForCurrentUser.path) : path).standardized.path
+    return resolved.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
 }
 
 func slugify(_ name: String) -> String {
@@ -89,10 +96,21 @@ func readJSON(_ file: URL) -> [String: Any] {
     return json
 }
 
-func writeJSON(_ dict: [String: Any], to file: URL) {
+enum WriteError: Error {
+    case serializationFailed(String)
+    case writeFailed(String, Error)
+}
+
+func writeJSON(_ dict: [String: Any], to file: URL) throws {
     ensureConfigDir()
-    guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) else { return }
-    try? data.write(to: file)
+    guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]) else {
+        throw WriteError.serializationFailed(file.lastPathComponent)
+    }
+    do {
+        try data.write(to: file)
+    } catch {
+        throw WriteError.writeFailed(file.lastPathComponent, error)
+    }
     try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
 }
 
@@ -103,7 +121,11 @@ func readConfig() -> [String: Any] {
 }
 
 func writeConfig(_ config: [String: Any]) {
-    writeJSON(config, to: configFile)
+    do {
+        try writeJSON(config, to: configFile)
+    } catch {
+        exitWithError("write_failed", extras: ["file": "config.json", "detail": error.localizedDescription])
+    }
 }
 
 func defaultConfig() -> [String: Any] {
@@ -124,7 +146,11 @@ func readInventory() -> [String: Any] {
 }
 
 func writeInventory(_ inv: [String: Any]) {
-    writeJSON(inv, to: inventoryFile)
+    do {
+        try writeJSON(inv, to: inventoryFile)
+    } catch {
+        exitWithError("write_failed", extras: ["file": "inventory.json", "detail": error.localizedDescription])
+    }
 }
 
 func inventoryItems(_ inv: [String: Any]) -> [[String: Any]] {
@@ -138,7 +164,11 @@ func readLists() -> [String: Any] {
 }
 
 func writeLists(_ data: [String: Any]) {
-    writeJSON(data, to: listsFile)
+    do {
+        try writeJSON(data, to: listsFile)
+    } catch {
+        exitWithError("write_failed", extras: ["file": "lists.json", "detail": error.localizedDescription])
+    }
 }
 
 func shoppingLists(_ data: [String: Any]) -> [[String: Any]] {
@@ -203,7 +233,8 @@ func requestReminderAccess() {
         }
     }
 
-    semaphore.wait()
+    let accessResult = semaphore.wait(timeout: .now() + 10)
+    if accessResult == .timedOut { exitWithError("timeout", extras: ["message": "EventKit request timed out"]) }
     if !accessGranted {
         exitWithError("Reminders access denied. Grant permission in System Settings > Privacy & Security > Reminders. All non-sync commands still work in local-only mode.")
     }
@@ -215,7 +246,11 @@ func findOrCreateReminderList(_ name: String) -> EKCalendar {
     }
     let newList = EKCalendar(for: .reminder, eventStore: store)
     newList.title = name
-    newList.source = store.defaultCalendarForNewReminders()?.source ?? store.sources.first(where: { $0.sourceType == .local })!
+    guard let source = store.defaultCalendarForNewReminders()?.source
+        ?? store.sources.first(where: { $0.sourceType == .local }) else {
+        exitWithError("no_local_source", extras: ["message": "No local Reminders source found"])
+    }
+    newList.source = source
     do {
         try store.saveCalendar(newList, commit: true)
     } catch {
@@ -233,7 +268,8 @@ func fetchReminders(from list: EKCalendar, includeCompleted: Bool = true) -> [EK
         fetched = reminders ?? []
         semaphore.signal()
     }
-    semaphore.wait()
+    let fetchResult = semaphore.wait(timeout: .now() + 10)
+    if fetchResult == .timedOut { exitWithError("timeout", extras: ["message": "EventKit request timed out"]) }
 
     if !includeCompleted {
         fetched = fetched.filter { !$0.isCompleted }
@@ -462,7 +498,7 @@ func cmdInvList(_ args: [String]) {
 func cmdInvUpdate(_ args: [String]) {
     var inv = readInventory()
     var items = inventoryItems(inv)
-    let now = ISO8601DateFormatter().string(from: Date())
+    let now = isoFormatter.string(from: Date())
 
     if hasFlag("--add", in: args) {
         guard let name = flagValue("--name", in: args) else {
@@ -555,7 +591,7 @@ func cmdShopList(_ args: [String]) {
     let config = readConfig()
     var listsData = readLists()
     var lists = shoppingLists(listsData)
-    let now = ISO8601DateFormatter().string(from: Date())
+    let now = isoFormatter.string(from: Date())
 
     if let name = flagValue("--create", in: args) {
         let existingIds = lists.compactMap { $0["id"] as? String }
@@ -630,8 +666,7 @@ func cmdShopList(_ args: [String]) {
         let lastSyncStr = config["last_sync"] as? String
         let lastSyncDate: Date?
         if let str = lastSyncStr {
-            let fmt = ISO8601DateFormatter()
-            lastSyncDate = fmt.date(from: str)
+            lastSyncDate = isoFormatter.date(from: str)
             if let d = lastSyncDate, d > Date() {
                 exitWithError("Invalid last_sync timestamp (future date): \(str)")
             }
@@ -698,6 +733,7 @@ func cmdShopList(_ args: [String]) {
                     listItems[itemIdx]["synced"] = true
                     pushedCount += 1
                 } catch {
+                    printToStderr("sync_error: \(error.localizedDescription) for item \(reminder.title ?? "unknown")")
                 }
             }
             lists[listIdx]["items"] = listItems
@@ -707,7 +743,7 @@ func cmdShopList(_ args: [String]) {
         writeLists(listsData)
 
         var updatedConfig = config
-        updatedConfig["last_sync"] = ISO8601DateFormatter().string(from: Date())
+        updatedConfig["last_sync"] = isoFormatter.string(from: Date())
         writeConfig(updatedConfig)
 
         if isSummary {
@@ -778,6 +814,11 @@ func cmdShopList(_ args: [String]) {
     printJSON(result)
 }
 
+func makeShopItem(name: String, category: String, quantity: Int, unit: String, fromInventory: String?) -> [String: Any] {
+    return ["name": name, "category": category, "quantity": quantity, "unit": unit,
+            "from_inventory": fromInventory as Any? ?? NSNull(), "synced": false, "purchased": false]
+}
+
 func cmdShopAdd(_ args: [String]) {
     guard let listId = flagValue("--list", in: args) else {
         exitWithError("Usage: shop-add --list <id> [--name <name> --qty <N> --unit <unit> [--category <cat>] | --from-inventory <inv-id> [--qty <N>] | --restock]")
@@ -807,8 +848,14 @@ func cmdShopAdd(_ args: [String]) {
             return
         }
 
+        let existingIds = listItems.compactMap { $0["from_inventory"] as? String }
+        let newLowItems = lowItems.filter { item in
+            guard let invId = item["id"] as? String else { return true }
+            return !existingIds.contains(invId)
+        }
+
         var added: [[String: Any]] = []
-        for item in lowItems {
+        for item in newLowItems {
             let name = item["name"] as? String ?? ""
             let threshold = item["restock_threshold"] as? Int ?? 0
             let qty = item["quantity"] as? Int ?? 0
@@ -817,15 +864,7 @@ func cmdShopAdd(_ args: [String]) {
             let category = item["category"] as? String ?? ""
             let invId = item["id"] as? String ?? ""
 
-            let newItem: [String: Any] = [
-                "name": name,
-                "category": category,
-                "quantity": max(restockQty, 1),
-                "unit": unit,
-                "from_inventory": invId,
-                "synced": false,
-                "purchased": false
-            ]
+            let newItem = makeShopItem(name: name, category: category, quantity: max(restockQty, 1), unit: unit, fromInventory: invId)
             listItems.append(newItem)
             added.append(newItem)
         }
@@ -856,15 +895,7 @@ func cmdShopAdd(_ args: [String]) {
             qty = max(threshold - currentQty + 1, 1)
         }
 
-        let newItem: [String: Any] = [
-            "name": name,
-            "category": category,
-            "quantity": qty,
-            "unit": unit,
-            "from_inventory": invId,
-            "synced": false,
-            "purchased": false
-        ]
+        let newItem = makeShopItem(name: name, category: category, quantity: qty, unit: unit, fromInventory: invId)
 
         listItems.append(newItem)
         lists[listIdx]["items"] = listItems
@@ -886,15 +917,7 @@ func cmdShopAdd(_ args: [String]) {
 
     let category = flagValue("--category", in: args) ?? ""
 
-    let newItem: [String: Any] = [
-        "name": name,
-        "category": category,
-        "quantity": qty,
-        "unit": unit,
-        "from_inventory": NSNull(),
-        "synced": false,
-        "purchased": false
-    ]
+    let newItem = makeShopItem(name: name, category: category, quantity: qty, unit: unit, fromInventory: nil)
 
     listItems.append(newItem)
     lists[listIdx]["items"] = listItems
