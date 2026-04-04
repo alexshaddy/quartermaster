@@ -26,6 +26,7 @@ Run `--show` first to display the current state. Present as:
 - Categories list
 - Save directories (lists, briefs)
 - Sync reminder list name
+- Sync on session start (enabled/disabled)
 - Last sync timestamp
 
 **Step 3: Ask what to configure**

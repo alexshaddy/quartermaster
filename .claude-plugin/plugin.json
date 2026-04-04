@@ -1,6 +1,6 @@
 {
   "name": "quartermaster",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Inventory and shopping list management for Claude Code — usage tracking, restock alerts, Apple Reminders sync",
   "author": { "name": "alexshaddy" },
   "license": "MIT",

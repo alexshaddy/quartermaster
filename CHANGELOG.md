@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.2] — 2026-04-04
+
+### Fixed
+- `resolvePath` and `isPathSafe` now handle bare `~` (no trailing slash) as home directory
+- `isPathSafe` delegates tilde expansion to `resolvePath` — eliminates duplicate logic
+- `saveBrief` returns `Bool`; `brief_saved` in output reflects actual write outcome
+- `--export` uses throwing write with `exitWithError("export_write_failed")` on failure
+- `--set-sync-on-session-start` guard uses `"invalid_value"` error code with structured extras
+- `exitWithError` in `findOrCreateReminderList` uses machine-readable codes (`reminders_access_denied`, `create_list_failed`) instead of human strings
+- `qm-config.md --show` display list now includes `sync_on_session_start`
+
 ## [0.1.0] - 2026-03-30
 
 ### Added

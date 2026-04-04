@@ -1,7 +1,7 @@
 import Foundation
 import EventKit
 
-let VERSION = "0.1.1"
+let VERSION = "0.1.2"
 
 func jsonString(_ dict: [String: Any]) -> String {
     guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
@@ -51,6 +51,9 @@ let homeDir = fm.homeDirectoryForCurrentUser
 let isoFormatter = ISO8601DateFormatter()
 
 func resolvePath(_ path: String) -> URL {
+    if path == "~" {
+        return homeDir
+    }
     if path.hasPrefix("~/") {
         return homeDir.appendingPathComponent(String(path.dropFirst(2)))
     }
@@ -59,9 +62,8 @@ func resolvePath(_ path: String) -> URL {
 
 func isPathSafe(_ path: String) -> Bool {
     guard !path.contains("..") else { return false }
-    let expanded = path.hasPrefix("~/") ? FileManager.default.homeDirectoryForCurrentUser.path + "/" + String(path.dropFirst(2)) : path
-    let resolved = URL(fileURLWithPath: expanded).standardized.path
-    return resolved.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
+    let resolved = resolvePath(path).standardized.path
+    return resolved.hasPrefix(homeDir.path)
 }
 
 func slugify(_ name: String) -> String {
@@ -213,12 +215,19 @@ func ensureOutputDir(_ path: String) {
     try? fm.createDirectory(at: url, withIntermediateDirectories: true)
 }
 
-func saveBrief(_ content: String, config: [String: Any]) {
+@discardableResult
+func saveBrief(_ content: String, config: [String: Any]) -> Bool {
     let briefsDir = config["briefs_dir"] as? String ?? "~/quartermaster/briefs"
     ensureOutputDir(briefsDir)
     let dateStr = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
     let fileURL = resolvePath(briefsDir).appendingPathComponent("\(dateStr).md")
-    try? content.write(to: fileURL, atomically: true, encoding: .utf8)
+    do {
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+        return true
+    } catch {
+        printToStderr("{\"error\":\"brief_write_failed\",\"detail\":\"\(error.localizedDescription)\"}")
+        return false
+    }
 }
 
 let store = EKEventStore()
@@ -242,7 +251,7 @@ func requestReminderAccess() {
     let accessResult = semaphore.wait(timeout: .now() + 10)
     if accessResult == .timedOut { exitWithError("timeout", extras: ["message": "EventKit request timed out"]) }
     if !accessGranted {
-        exitWithError("Reminders access denied. Grant permission in System Settings > Privacy & Security > Reminders. All non-sync commands still work in local-only mode.")
+        exitWithError("reminders_access_denied", extras: ["message": "Grant permission in System Settings > Privacy & Security > Reminders. Non-sync commands still work in local-only mode."])
     }
 }
 
@@ -260,7 +269,7 @@ func findOrCreateReminderList(_ name: String) -> EKCalendar {
     do {
         try store.saveCalendar(newList, commit: true)
     } catch {
-        exitWithError("Failed to create reminder list '\(name)': \(error.localizedDescription)")
+        exitWithError("create_list_failed", extras: ["list": name, "detail": error.localizedDescription])
     }
     return newList
 }
@@ -392,7 +401,7 @@ func cmdQmConfig(_ args: [String]) {
 
     if let valueStr = flagValue("--set-sync-on-session-start", in: args) {
         guard valueStr == "true" || valueStr == "false" else {
-            exitWithError("--set-sync-on-session-start requires <true|false>")
+            exitWithError("invalid_value", extras: ["flag": "--set-sync-on-session-start", "expected": "true|false", "got": valueStr])
         }
         config["sync_on_session_start"] = (valueStr == "true")
         writeConfig(config)
@@ -479,8 +488,7 @@ func cmdInvList(_ args: [String]) {
                     lines.append("- \(name): \(qty) \(unit)\(daysStr)")
                 }
             }
-            saveBrief(lines.joined(separator: "\n"), config: config)
-            summaryResult["brief_saved"] = true
+            summaryResult["brief_saved"] = saveBrief(lines.joined(separator: "\n"), config: config)
         }
         printJSON(summaryResult)
         return
@@ -504,8 +512,7 @@ func cmdInvList(_ args: [String]) {
             if let d = days { line += " (~\(d) days)" }
             lines.append(line)
         }
-        saveBrief(lines.joined(separator: "\n"), config: config)
-        result["brief_saved"] = true
+        result["brief_saved"] = saveBrief(lines.joined(separator: "\n"), config: config)
     }
 
     printJSON(result)
@@ -668,7 +675,11 @@ func cmdShopList(_ args: [String]) {
 
         let fileURL = resolvePath(listsDir).appendingPathComponent("\(id).md")
         let content = lines.joined(separator: "\n")
-        try? content.write(to: fileURL, atomically: true, encoding: .utf8)
+        do {
+            try content.write(to: fileURL, atomically: true, encoding: .utf8)
+        } catch {
+            exitWithError("export_write_failed", extras: ["path": fileURL.path, "detail": error.localizedDescription])
+        }
         printJSON(["status": "exported", "path": fileURL.path])
         return
     }
@@ -823,8 +834,7 @@ func cmdShopList(_ args: [String]) {
             let count = s["item_count"] as? Int ?? 0
             lines.append("- \(name): \(count) items")
         }
-        saveBrief(lines.joined(separator: "\n"), config: config)
-        result["brief_saved"] = true
+        result["brief_saved"] = saveBrief(lines.joined(separator: "\n"), config: config)
     }
 
     printJSON(result)
